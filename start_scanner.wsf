@@ -1,0 +1,454 @@
+<job>
+<script language="VBScript">
+'****************************************************************************
+'
+'  Script Name:  start_scanner.wsf
+'
+'  Description:  collect several information from remote servers
+'  (c) 2007 by CSC
+'  Date           Developer          	Comments
+'  ----           ---------          	--------
+'  12.10.2007     Stefan Otto		Initial Release
+'  20.01.2009     Stefan Otto		changed encrytion
+'  01.03.2011     Stefan Otto		add network port scann
+'					add running process & Service
+'					add Network config
+'					add local Groups & Usere
+'  24.05.2011	 Stefan Otto		xml output
+'  11.07.2011	 Stefan Otto		add TimeZone 
+'  15.07.2011	 Stefan Otto		aadd LastBootUpTime
+'  18.08.2011    Stefan Otto		add CPU Core & LogicalProcessors
+'  22.09.2011	Joscha Arenz		add IIS virtual/pysical Directory
+'
+' need mswinsck.ocx !
+'****************************************************************************
+
+' ### options ###
+Option Explicit
+
+' ### Const ###
+Const Version = "1.5.4"
+Const ForReading = 1, ForWriting = 2, ForAppending = 8
+Const TristateUseDefault = -2, TristateTrue = -1, TristateFalse = 0
+Const module_path = "moduls"
+Const data_path = "data"
+Const results_path = "results"
+
+Const module_extention = ".vbs"
+Const module_header = ".txt"
+
+Const Server_file_name = "Server.csv"
+Const User_file_name = "User.csv"
+Const Location_file_name = "Location.csv"
+Const Asset_file_name = "Asset.csv"
+Const Owner_file_name = "Owner.csv"
+Const IIS_file_name = "IIS.csv"
+Const Server_scan_result_file_name = "scan_result.csv"
+
+Const tab = ";"
+
+
+' ### Dim ###
+Dim CurrDir
+Dim objFSO,objShell
+Dim filelist,file
+
+' ################## Start of script ########################
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objShell = CreateObject("Wscript.Shell")
+
+CurrDir= mid( WScript.ScriptFullName,1,InStrRev(WScript.ScriptFullName,wscript.ScriptName)-1)
+wscript.echo " CSC  - CMDB Server reporting scanner version " & Version
+
+wscript.echo ""
+parse_user_file()
+
+
+' read all filenames from folder "modules"
+set filelist=objFSO.GetFolder(CurrDir & module_path &"\")
+For each file in filelist.Files
+        if len(file.name) > 4 then
+                if right(file.name,4) =  module_extention then
+                        wscript.echo CurrDir & module_path & "#"&file.name
+           ' Include-modules
+                  Execute CreateObject("Scripting.FileSystemObject").OpenTextFile(CurrDir & module_path & "\"&file.name).ReadAll
+                end if
+        End if
+next
+
+
+' scann server & user file
+Call Scann_servers()
+
+wscript.echo "finished"
+
+' ################## end of script ########################
+
+' #######################################################################
+Function Scann_servers()
+
+Dim file,f,f2,InPutFile,lineArray,line,pw
+
+Set f = objFSO.GetFile(CurrDir & data_path &"\"& Server_file_name)
+Set InPutFile = f.OpenAsTextStream(ForReading, TristateUseDefault)
+line = InPutFile.ReadLine ' skip first header line
+
+Set f2 = objFSO.CreateTextFile(CurrDir & results_path &"\"& Server_scan_result_file_name, True)
+f2.Write (Generate_File_Header() & vbcrlf)
+
+While InPutFile.AtEndOfStream = False
+        line = InPutFile.ReadLine
+        if len(line) > 0 then    ' skip empty lines
+                lineArray = Split(line, tab, -1, 1)
+
+                ' userID;Server;IP
+                'wscript.echo "userID= '" & lineArray(0) &"' Server='" & lineArray(1) &"' IP='"& lineArray(2) &"'"
+
+
+                f2.Write (Module_execution(UserID2Name(lineArray(0)),User_PW(lineArray(0)),lineArray(1),lineArray(2)) & vbcrlf)
+        end if
+Wend
+f2.Close
+
+End Function
+' #######################################################################
+Function UserID2Name(id)
+
+Dim file,f,InPutFile,lineArray,line
+
+Set f = objFSO.GetFile(CurrDir & data_path &"\"& User_file_name)
+Set InPutFile = f.OpenAsTextStream(ForReading, TristateUseDefault)
+line = InPutFile.ReadLine ' skip first header line
+
+While InPutFile.AtEndOfStream = False
+        line = InPutFile.ReadLine
+        if len(line) > 0 then    ' skip empty lines
+                lineArray = Split(line, tab, -1, 1)
+
+                ' UserID;User;encryption;password
+                ' wscript.echo "userID= '" & lineArray(0) &"' User='" & lineArray(1) &"' encryption='"& lineArray(2) &"' pw='"& lineArray(3) &"'"
+                if lineArray(0) = id then
+                       UserID2Name =  lineArray(1)
+                End If
+        end if
+Wend
+end Function
+
+' #######################################################################
+Function User_PW(id)
+Dim file,f,InPutFile,lineArray,line
+
+Set f = objFSO.GetFile(CurrDir & data_path &"\"& User_file_name)
+Set InPutFile = f.OpenAsTextStream(ForReading, TristateUseDefault)
+line = InPutFile.ReadLine ' skip first header line
+
+While InPutFile.AtEndOfStream = False
+        line = InPutFile.ReadLine
+        if len(line) > 0 then    ' skip empty lines
+                lineArray = Split(line, tab, -1, 1)
+
+                ' UserID;User;encryption;password
+                ' wscript.echo "userID= '" & lineArray(0) &"' User='" & lineArray(1) &"' encryption='"& lineArray(2) &"' pw='"& lineArray(3) &"'"
+
+                if lineArray(0) = id then
+                       User_PW =  Decrypt(25,lineArray(2))
+                End If
+        end if
+Wend
+end Function
+' #######################################################################
+
+function Generate_File_Header()
+dim temp, ip,user_domain,user_name,pw, host
+Dim fp, fx, fd, fs
+'Generate_File_Header = "Name;Memory;CPU_Number;CPU_Clock;CPU_Type;Bios_Date;BIOS_Version;OS_Version;Number_of_Disk_Volumes;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace;LogicalDisk_Size;LogicalDisk.Freespace"
+
+ip = ""
+user_domain = ""
+user_name = ""
+pw = ""
+host = ""
+
+	temp = ""
+	temp = temp & "" & Win32_ComputerSystem(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Win32_ComputerSystemProcessor(ip,user_domain,user_name,pw)
+	temp = temp & ";" & Win32_BIOS(ip,user_domain,user_name,pw)
+	temp = temp & ";" & Win32_SystemOperatingSystem(ip,user_domain,user_name,pw)
+	temp = temp & ";" & Gues_OS(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & DNS(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & RemoteMgt(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Location(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Win32_TimeZone(ip,user_domain,user_name,pw,"")
+	temp = temp & ";" & Owner(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Asset(ip,user_domain,user_name,pw,host)
+
+  ' create new file
+Set fp = objFSO.CreateTextFile(CurrDir & results_path &"\PnPEntity"&".csv", True)
+fp.Write (Win32_PnPEntity(ip,user_domain,user_name,pw,"")&vbCRLF)
+fp.Close
+
+  ' create new file
+Set fx = objFSO.CreateTextFile(CurrDir & results_path &"\Products"&".csv", True)
+fx.Write (Win32_Products(ip,user_domain,user_name,pw,"")&vbCRLF )
+fx.Close
+
+  ' create new file
+Set fd = objFSO.CreateTextFile(CurrDir & results_path &"\LogicalDisk"&".csv", True)
+fd.Write (Win32_SystemPartitions(ip,user_domain,user_name,pw,"")&vbCRLF )
+fd.Close
+
+  ' create new file
+Set fs = objFSO.CreateTextFile(CurrDir & results_path &"\Service"&".csv", True)
+fs.Write (Win32_Services(ip,user_domain,user_name,pw,"")&vbCRLF )
+fs.Close
+
+
+  ' create new file
+Set fs = objFSO.CreateTextFile(CurrDir & results_path &"\Process"&".csv", True)
+fs.Write (Win32_Process(ip,user_domain,user_name,pw,"")&vbCRLF )
+fs.Close
+
+
+  ' create new file
+Set fs = objFSO.CreateTextFile(CurrDir & results_path &"\Networks"&".csv", True)
+fs.Write (Win32_NetworkAdapterConfiguration(ip,user_domain,user_name,pw,"")&vbCRLF )
+fs.Close
+
+  ' create new file
+Set fs = objFSO.CreateTextFile(CurrDir & results_path &"\LocalAccountGroups"&".csv", True)
+fs.Write (Win32_LocalSecurity(ip,user_domain,user_name,pw,"")&vbCRLF )
+
+ ' create new file
+Set fs = objFSO.CreateTextFile(CurrDir & results_path &"\IIS"&".csv", True)
+fs.Write (Win32_IIS(ip,user_domain,user_name,pw,"")&vbCRLF )
+
+
+fs.Close
+
+Generate_File_Header = temp
+
+End function
+' #######################################################################
+Function Module_execution(user,pw,host,ip)
+Dim temp
+Dim lineArray,line,user_name,user_domain
+
+wscript.echo
+'wscript.echo "user= '" & user &"' Server='" & host &"' IP='"& ip &"' pw='"& pw &"'"
+lineArray = Split(user, "\", -1, 1)
+
+if UBound(lineArray) = 0 then   ' userename without domain
+        user_domain =  host
+        user_name =  user
+else
+        user_domain =  lineArray(0)
+        user_name =  lineArray(1)
+End if
+
+if Gues_OS(ip,user_domain,user_name,pw,"") = "Wintel" then
+
+	temp = ""
+	temp = temp & "" & Win32_ComputerSystem(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Win32_ComputerSystemProcessor(ip,user_domain,user_name,pw)
+	temp = temp & ";" & Win32_BIOS(ip,user_domain,user_name,pw)
+	temp = temp & ";" & Win32_SystemOperatingSystem(ip,user_domain,user_name,pw)
+	temp = temp & ";" & Gues_OS(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & DNS(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & RemoteMgt(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Location(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Win32_TimeZone(ip,user_domain,user_name,pw,"")
+	temp = temp & ";" & Owner(ip,user_domain,user_name,pw,host)
+	temp = temp & ";" & Asset(ip,user_domain,user_name,pw,host)
+
+	Call Win32_SystemPartitions(ip,user_domain,user_name,pw,host)
+	Call Win32_Products(ip,user_domain,user_name,pw,host)
+	Call Win32_PnPEntity(ip,user_domain,user_name,pw,host)
+	Call Win32_Services(ip,user_domain,user_name,pw,host)
+	Call Win32_Process(ip,user_domain,user_name,pw,host)
+	Call Win32_NetworkAdapterConfiguration(ip,user_domain,user_name,pw,host)
+	Call Win32_LocalSecurity(ip,user_domain,user_name,pw,host)
+	Call Win32_IIS(ip,user_domain,user_name,pw,host)
+else
+	temp = ""
+	temp = temp & "" & CalcKeyString(ip,host)' KEY
+	temp = temp & ";" & "N/A"	' Name
+	temp = temp & ";" & ip		' IP_Adress
+	temp = temp & ";" & "N/A"	' Manufacturer
+	temp = temp & ";" & "N/A"	' Model
+	temp = temp & ";" & "N/A"	' PhysicalMemory(MB)
+	temp = temp & ";" & "N/A"	' CPU_Clock
+	temp = temp & ";" & "N/A"   ' AddressWidth
+	temp = temp & ";" & "N/A"	' CPU_Type
+	temp = temp & ";" & "N/A"	' NumberOfProcessors
+	temp = temp & ";" & "N/A"   ' NumberOfCores
+	temp = temp & ";" & "N/A"   ' NumberOfLogicalProcessors
+	temp = temp & ";" & "N/A"	' Bios_Date
+	temp = temp & ";" & "N/A"	' BIOS_Version
+	temp = temp & ";" & "N/A"	' SerialNumber
+	temp = temp & ";" & "N/A"	' OperatingSystem.Name
+	temp = temp & ";" & "N/A"	' OperatingSystem.Version
+	temp = temp & ";" & "N/A"	' OperatingSystem.BuildNumber
+	temp = temp & ";" & "N/A"	' OperatingSystem.CSDVersion
+	temp = temp & ";" & "N/A"	' LastBootUpTime
+	temp = temp & ";" & Gues_OS(ip,user_domain,user_name,pw,host)	' Computing Platform
+	temp = temp & ";" & DNS(ip,user_domain,user_name,pw,host)	' DNSName
+	temp = temp & ";" & RemoteMgt(ip,user_domain,user_name,pw,host)	' RemoteMgt
+	temp = temp & ";" & Location(ip,user_domain,user_name,pw,host)	' Country, City, Building, Room, Shelf, Shelf_Slot
+	temp = temp & ";" & "N/A"	' TimeZone.Description
+	temp = temp & ";" & Owner(ip,user_domain,user_name,pw,host)	' OwnerName, OwnerPhone, OwnerEMail
+	temp = temp & ";" & Asset(ip,user_domain,user_name,pw,host)	' AssetNr
+
+End if
+
+Module_execution = temp
+End Function
+
+' #######################################################################
+Private Function Encrypt(key,strString)
+Dim CharHexSet, intStringLen, strTemp, strRAW, i, intKey, intOffSet
+Randomize Timer
+
+intKey = Round((RND * 1000000) + 1000000)
+intOffSet = Round((RND * 1000000) + 1000000)
+
+        If IsNull(strString) = False Then
+                strRAW = strString
+                intStringLen = Len(strRAW)
+
+                                For i = 0 to intStringLen - 1
+                                        strTemp = Left(strRAW, 1)
+                                        strRAW = Right(strRAW, Len(strRAW) - 1)
+                                        CharHexSet = CharHexSet & Hex(Asc(strTemp) * intKey) & Hex(intKey)
+                                Next
+
+                Encrypt = CharHexSet & "|" & Hex(intOffSet + intKey) & "|" & Hex(intOffSet)
+        Else
+                Encrypt = ""
+        End If
+End Function
+
+
+' #######################################################################
+Private Function Decrypt(key,strCryptString)
+Dim strRAW, arHexCharSet, i, intKey, intOffSet, strRawKey, strHexCrypData
+
+        strRawKey = Right(strCryptString, Len(strCryptString) - InStr(strCryptString, "|"))
+        intOffSet = Right(strRawKey, Len(strRawKey) - InStr(strRawKey,"|"))
+        intKey = HexConv(Left(strRawKey, InStr(strRawKey, "|") - 1)) - HexConv(intOffSet)
+        strHexCrypData = Left(strCryptString, Len(strCryptString) - (Len(strRawKey) + 1))
+
+        arHexCharSet = Split(strHexCrypData, Hex(intKey))
+
+                For i=0 to UBound(arHexCharSet)
+                        strRAW = strRAW & Chr(HexConv(arHexCharSet(i))/intKey)
+                Next
+
+        Decrypt = strRAW
+End Function
+
+
+' #######################################################################
+Private Function HexConv(hexVar)
+Dim hxx, hxx_var, multiply
+   IF hexVar <> "" THEN
+        hexVar = UCASE(hexVar)
+        hexVar = StrReverse(hexVar)
+        DIM hx()
+        REDIM hx(LEN(hexVar))
+        hxx = 0
+        hxx_var = 0
+        FOR hxx = 1 TO LEN(hexVar)
+                IF multiply = "" THEN multiply = 1
+                hx(hxx) = mid(hexVar,hxx,1)
+                hxx_var = (get_hxno(hx(hxx)) * multiply) + hxx_var
+                multiply = (multiply * 16)
+        NEXT
+        hexVar = hxx_var
+        HexConv = hexVar
+   END IF
+End Function
+' #######################################################################
+Private Function get_hxno(ghx)
+        If ghx = "A" Then
+                ghx = 10
+        ElseIf ghx = "B" Then
+                ghx = 11
+        ElseIf ghx = "C" Then
+                ghx = 12
+        ElseIf ghx = "D" Then
+                ghx = 13
+        ElseIf ghx = "E" Then
+                ghx = 14
+        ElseIf ghx = "F" Then
+                ghx = 15
+        End If
+        get_hxno = ghx
+End Function
+
+' #######################################################################
+Function parse_user_file()
+Dim file,f,InPutFile,lineArray,line
+dim tname,tfolder,f1,f2
+Const TemporaryFolder = 2
+
+' get random temp filename
+tname = objFSO.GetSpecialFolder(TemporaryFolder) & "\" & objFSO.GetTempName
+
+'Set tfolder = objFSO.GetSpecialFolder(TemporaryFolder)
+'tname = objFSO.GetTempName
+
+' move userfile to temp directory
+Set f2 = objFSO.GetFile(CurrDir & data_path &"\"& User_file_name)
+f2.Move (tname)
+
+
+' build new user file
+Set f = objFSO.GetFile(tname)
+Set f1 = objFSO.CreateTextFile(CurrDir & data_path &"\"& User_file_name, True)
+
+Set InPutFile = f.OpenAsTextStream(ForReading, TristateUseDefault)
+line = InPutFile.ReadLine ' skip first header line
+f1.Write (line & vbcrlf)
+
+While InPutFile.AtEndOfStream = False
+        line = InPutFile.ReadLine
+        if len(line) > 0 then    ' skip empty lines
+                lineArray = Split(line, tab, -1, 1)
+                ' UserID;User;encryption;password
+                ' wscript.echo "userID= '" & lineArray(0) &"' User='" & lineArray(1) &"' encryption='"& lineArray(2) &"' pw='"& lineArray(3) &"'"
+                if len( lineArray(3) ) > 0 then
+                  f1.Write (lineArray(0) &";" & lineArray(1) &";"& Encrypt(25,lineArray(3)) &";"& "" & vbcrlf )
+                else
+                  f1.Write (lineArray(0) &";" & lineArray(1) &";"& lineArray(2) &";"& lineArray(3) & vbcrlf)
+
+                End If
+        end if
+Wend
+
+' Close the file to writing.
+f1.Close
+
+
+' Delete the files.
+'f.Delete
+
+end Function
+' #######################################################################
+Function WMIDateStringToDate(dtmBootup)
+    WMIDateStringToDate =  _
+        CDate(Mid(dtmBootup, 5, 2) & "/" & _
+        Mid(dtmBootup, 7, 2) & "/" & Left(dtmBootup, 4) _
+        & " " & Mid (dtmBootup, 9, 2) & ":" & _
+        Mid(dtmBootup, 11, 2) & ":" & Mid(dtmBootup, _
+        13, 2))
+End Function
+' #######################################################################
+
+' #######################################################################
+Function CalcKeyString (ip,host)
+	CalcKeyString = UCASE(host) 
+End function
+' #######################################################################
+</script>
+</job>
+
